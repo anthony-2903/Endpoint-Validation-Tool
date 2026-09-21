@@ -1,0 +1,35 @@
+{
+  "BaselineVersion": "1.0.0",
+  "LocalAdministrators": {
+    "AllowedMembers": []
+  },
+  "BitLocker": {
+    "Required": true,
+    "MinimumEncryptionPercentage": 100,
+    "RequireProtection": true
+  },
+  "SecurityAgents": [],
+  "RequiredSoftware": [
+    {
+      "Name": "Google Chrome",
+      "MinimumVersion": "120.0",
+      "Required": true
+    },
+    {
+      "Name": "Adobe Acrobat",
+      "MinimumVersion": "2023.0",
+      "Required": true
+    },
+    {
+      "Name": "Office",
+      "MinimumVersion": "16.0",
+      "Required": true
+    }
+  ],
+  "Windows": {
+    "Edition": "",
+    "MinimumBuild": "",
+    "MinimumUBR": 0,
+    "ApprovedKB": []
+  }
+}

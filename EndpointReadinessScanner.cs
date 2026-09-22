@@ -1,4 +1,4 @@
-// Endpoint Readiness Scanner v1.0.0. Native .NET Framework Windows Forms application.
+// Endpoint Readiness Scanner v1.1.0. Native .NET Framework Windows Forms application.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -7,55 +7,152 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Reflection;
 using System.ServiceProcess;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
 namespace EndpointReadinessScanner {
-  public class Rule { public string Name {get;set;} public string ServiceName {get;set;} public bool Required {get;set;} public string MinimumVersion {get;set;} }
-  public class AdminRule { public List<string> AllowedMembers {get;set;} }
-  public class BitLockerRule { public bool Required {get;set;} public int MinimumEncryptionPercentage {get;set;} public bool RequireProtection {get;set;} }
-  public class WindowsRule { public string Edition {get;set;} public string MinimumBuild {get;set;} public int MinimumUBR {get;set;} public List<string> ApprovedKB {get;set;} }
-  public class Baseline { public string BaselineVersion {get;set;} public AdminRule LocalAdministrators {get;set;} public BitLockerRule BitLocker {get;set;} public List<Rule> SecurityAgents {get;set;} public List<Rule> RequiredSoftware {get;set;} public WindowsRule Windows {get;set;} }
+  #region Baseline models
+
+  /// <summary>Regla reutilizable para software o servicios requeridos.</summary>
+  public class Rule {
+    public string Name { get; set; }
+    public string ServiceName { get; set; }
+    public bool Required { get; set; }
+    public string MinimumVersion { get; set; }
+  }
+
+  /// <summary>Miembros permitidos del grupo local Administradores.</summary>
+  public class AdminRule { public List<string> AllowedMembers { get; set; } }
+
+  /// <summary>Parámetros esperados para BitLocker.</summary>
+  public class BitLockerRule { public bool Required { get; set; } public int MinimumEncryptionPercentage { get; set; } public bool RequireProtection { get; set; } }
+
+  /// <summary>Edición y nivel mínimo de Windows aprobado.</summary>
+  public class WindowsRule { public string Edition { get; set; } public string MinimumBuild { get; set; } public int MinimumUBR { get; set; } public List<string> ApprovedKB { get; set; } }
+
+  /// <summary>Determina si el equipo debe estar al día y sin reinicio pendiente.</summary>
+  public class WindowsUpdateRule { public bool Required { get; set; } public bool RequireNoPendingUpdates { get; set; } public bool RequireNoReboot { get; set; } }
+
+  /// <summary>Define la red Wi-Fi corporativa requerida.</summary>
+  public class CorporateWifiRule { public bool Required { get; set; } public string Ssid { get; set; } }
+
+  /// <summary>Archivo Baseline.json deserializado para el escaneo.</summary>
+  public class Baseline {
+    public string BaselineVersion { get; set; }
+    public AdminRule LocalAdministrators { get; set; }
+    public BitLockerRule BitLocker { get; set; }
+    public List<Rule> SecurityAgents { get; set; }
+    public List<Rule> RequiredSoftware { get; set; }
+    public WindowsRule Windows { get; set; }
+    public WindowsUpdateRule WindowsUpdate { get; set; }
+    public CorporateWifiRule CorporateWifi { get; set; }
+  }
+
+  /// <summary>Datos de identificación recopilados localmente del equipo.</summary>
   public class Device { public string Hostname, User, Domain, Manufacturer, Model, Serial, Windows, Version, Build; public int UBR; }
-  public class ScanResult { public string Name {get;set;} public bool Critical {get;set;} public string Status {get;set;} public string Expected {get;set;} public string Detected {get;set;} public string Problem {get;set;} public string Action {get;set;} public string Icon { get { return Status=="OK" ? "✓" : Status=="FALLA" ? "✕" : Status=="ADVERTENCIA" ? "!" : "?"; } } }
+
+  /// <summary>Resultado visible y exportable de un control.</summary>
+  public class ScanResult {
+    public string Name { get; set; }
+    public bool Critical { get; set; }
+    public string Status { get; set; }
+    public string Expected { get; set; }
+    public string Detected { get; set; }
+    public string Problem { get; set; }
+    public string Action { get; set; }
+    public string Icon { get { return Status == "OK" ? "✓" : Status == "FALLA" ? "✕" : Status == "ADVERTENCIA" ? "!" : "?"; } }
+  }
+
+  #endregion
+
+  #region Custom controls
   public class RoundedPanel : Panel { public int CornerRadius=12; public Color BorderColor=Color.FromArgb(220,228,238); public RoundedPanel(){DoubleBuffered=true;Padding=new Padding(1);} protected override void OnResize(EventArgs e){base.OnResize(e); if(Width>1&&Height>1)using(var p=PathFor(new Rectangle(0,0,Width-1,Height-1),CornerRadius))Region=new Region(p);} protected override void OnPaintBackground(PaintEventArgs e){e.Graphics.SmoothingMode=SmoothingMode.AntiAlias; using(var path=PathFor(new Rectangle(0,0,Width-1,Height-1),CornerRadius))using(var brush=new SolidBrush(BackColor)){e.Graphics.FillPath(brush,path);}} protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;using(var path=PathFor(new Rectangle(0,0,Width-1,Height-1),CornerRadius))using(var pen=new Pen(BorderColor)){e.Graphics.DrawPath(pen,path);}} static GraphicsPath PathFor(Rectangle box,int r){var p=new GraphicsPath();r=Math.Min(r,Math.Min(box.Width,box.Height)/2);p.AddArc(box.Left,box.Top,r*2,r*2,180,90);p.AddArc(box.Right-r*2,box.Top,r*2,r*2,270,90);p.AddArc(box.Right-r*2,box.Bottom-r*2,r*2,r*2,0,90);p.AddArc(box.Left,box.Bottom-r*2,r*2,r*2,90,90);p.CloseFigure();return p;} }
   public class RoundedButton : Button { public int CornerRadius=8; public RoundedButton(){FlatStyle=FlatStyle.Flat;FlatAppearance.BorderSize=0;BackColor=Color.FromArgb(31,111,235);ForeColor=Color.White;DoubleBuffered=true;} protected override void OnResize(EventArgs e){base.OnResize(e);if(Width>1&&Height>1)using(var p=Path())Region=new Region(p);} protected override void OnPaintBackground(PaintEventArgs e){} protected override void OnPaint(PaintEventArgs e){e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;using(var p=Path()){using(var b=new SolidBrush(Enabled?BackColor:Color.FromArgb(225,230,238)))e.Graphics.FillPath(b,p);} TextRenderer.DrawText(e.Graphics,Text,Font,ClientRectangle,Enabled?ForeColor:Color.DimGray,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter);} GraphicsPath Path(){var r=new Rectangle(0,0,Width-1,Height-1);int c=Math.Min(CornerRadius,Math.Min(r.Width,r.Height)/2);var p=new GraphicsPath();p.AddArc(r.Left,r.Top,c*2,c*2,180,90);p.AddArc(r.Right-c*2,r.Top,c*2,c*2,270,90);p.AddArc(r.Right-c*2,r.Bottom-c*2,c*2,c*2,0,90);p.AddArc(r.Left,r.Bottom-c*2,c*2,c*2,90,90);p.CloseFigure();return p;} }
+
+  #endregion
 
   static class Program {
     [STAThread] static void Main() { try { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); Application.Run(new ScannerForm()); } catch(Exception ex) { try { File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Logs","StartupErrors.log"),DateTime.Now.ToString("s")+" "+ex+Environment.NewLine); } catch {} MessageBox.Show("No se pudo iniciar Endpoint Readiness Scanner. Revise Logs\\StartupErrors.log.\r\n\r\n"+ex.Message,"Error de inicio",MessageBoxButtons.OK,MessageBoxIcon.Error); } }
   }
   public class ScannerForm : Form {
-    const string Version="1.0.0"; string root, evidenceFolder; Device device; Baseline baseline; DateTime started;
-    readonly FlowLayoutPanel grid=new FlowLayoutPanel(); readonly TextBox details=new TextBox(); readonly ProgressBar progress=new ProgressBar(); readonly Label progressText=new Label(); readonly Label finalLabel=new Label(); readonly Panel info=new Panel(); readonly Label deviceHost=new Label(),deviceUser=new Label(),deviceSerial=new Label(),deviceModel=new Label(),deviceWindows=new Label(),deviceBuild=new Label(); readonly Button scan=new RoundedButton(), evidence=new RoundedButton(); readonly List<ScanResult> results=new List<ScanResult>(); readonly SplitContainer body=new SplitContainer(); readonly Panel bottom=new Panel(); int selectedIndex=-1;
+    private const string Version = "1.2.0";
+
+    // Estado de la ejecución.
+    private string root;
+    private string evidenceFolder;
+    private Device device;
+    private Baseline baseline;
+    private DateTime started;
+    private int selectedIndex = -1;
+    private readonly List<ScanResult> results = new List<ScanResult>();
+
+    // Controles principales de la interfaz.
+    private readonly FlowLayoutPanel grid = new FlowLayoutPanel();
+    private readonly TextBox details = new TextBox();
+    private readonly ProgressBar progress = new ProgressBar();
+    private readonly Label progressText = new Label();
+    private readonly Label loadingBadge = new Label();
+    private readonly System.Windows.Forms.Timer loadingTimer = new System.Windows.Forms.Timer();
+    private readonly Label finalLabel = new Label();
+    private readonly Panel info = new Panel();
+    private readonly SplitContainer body = new SplitContainer();
+    private readonly Panel bottom = new Panel();
+    private readonly Button scan = new RoundedButton();
+    private readonly Button evidence = new RoundedButton();
+
+    // Información del equipo mostrada en la cabecera.
+    private readonly Label deviceHost = new Label();
+    private readonly Label deviceUser = new Label();
+    private readonly Label deviceSerial = new Label();
+    private readonly Label deviceModel = new Label();
+    private readonly Label deviceWindows = new Label();
+    private readonly Label deviceBuild = new Label();
+    private int loadingFrame;
     public ScannerForm() {
       root=Path.GetDirectoryName(Application.ExecutablePath); Text="Endpoint Readiness Scanner"; Size=new Size(1050,720); MinimumSize=new Size(860,590); StartPosition=FormStartPosition.CenterScreen; BackColor=Color.FromArgb(245,247,250); Font=new Font("Segoe UI",9); AutoScaleMode=AutoScaleMode.Dpi;
+      loadingTimer.Interval=300; loadingTimer.Tick+=(s,e)=>AnimateLoadingBadge();
       var header=new Panel{Dock=DockStyle.Top,Height=87,BackColor=Color.FromArgb(23,54,93),Padding=new Padding(22,15,22,10)}; var productName=new Label{Text="Endpoint Readiness Scanner",ForeColor=Color.White,Font=new Font("Segoe UI",22,FontStyle.Bold),AutoSize=true,Location=new Point(20,12)}; var subtitle=new Label{Text="Preparación y validación de equipos Windows",ForeColor=Color.FromArgb(220,231,245),AutoSize=true,Location=new Point(23,52)}; var versionLabel=new Label{Text="Versión "+Version,ForeColor=Color.White,AutoSize=true}; header.Controls.Add(productName); header.Controls.Add(subtitle); header.Controls.Add(versionLabel); header.Resize+=(s,e)=>versionLabel.Location=new Point(Math.Max(20,header.ClientSize.Width-versionLabel.Width-22),20); Controls.Add(header);
       info.Dock=DockStyle.Top; info.Height=100; info.Padding=new Padding(22,10,22,8); info.BackColor=Color.White; AddInfoItem("EQUIPO",deviceHost,0,0); AddInfoItem("USUARIO",deviceUser,1,0); AddInfoItem("SERIAL",deviceSerial,2,0); AddInfoItem("MODELO",deviceModel,0,1); AddInfoItem("WINDOWS",deviceWindows,1,1); AddInfoItem("BUILD",deviceBuild,2,1); Controls.Add(info);
       body.Dock=DockStyle.Fill; body.SplitterDistance=600; body.Padding=new Padding(14,12,14,6); Controls.Add(body);
       var resultsPanel=new RoundedPanel{Dock=DockStyle.Fill,BackColor=Color.White,CornerRadius=14}; var tableHeader=new Panel{Height=36,BackColor=Color.FromArgb(235,241,248)}; tableHeader.Controls.Add(new Label{Text="  ESTADO",Location=new Point(8,10),AutoSize=true,Font=new Font("Segoe UI",8,FontStyle.Bold),ForeColor=Color.FromArgb(23,54,93)}); tableHeader.Controls.Add(new Label{Text="CONTROL",Location=new Point(82,10),AutoSize=true,Font=new Font("Segoe UI",8,FontStyle.Bold),ForeColor=Color.FromArgb(23,54,93)}); tableHeader.Controls.Add(new Label{Text="RESULTADO",Location=new Point(292,10),AutoSize=true,Font=new Font("Segoe UI",8,FontStyle.Bold),ForeColor=Color.FromArgb(23,54,93)}); grid.FlowDirection=FlowDirection.TopDown; grid.WrapContents=false; grid.AutoScroll=true; grid.Padding=new Padding(8,8,8,8); grid.BackColor=Color.White; resultsPanel.Resize+=(s,e)=>{tableHeader.Bounds=new Rectangle(1,1,resultsPanel.ClientSize.Width-2,36);grid.Bounds=new Rectangle(1,37,resultsPanel.ClientSize.Width-2,Math.Max(0,resultsPanel.ClientSize.Height-38));}; resultsPanel.Controls.Add(tableHeader); resultsPanel.Controls.Add(grid); body.Panel1.Controls.Add(resultsPanel);
       var detailsPanel=new RoundedPanel{Dock=DockStyle.Fill,BackColor=Color.White,CornerRadius=14}; details.Dock=DockStyle.Fill; details.Multiline=true; details.ReadOnly=true; details.ScrollBars=ScrollBars.Vertical; details.BorderStyle=BorderStyle.None; details.BackColor=Color.White; details.Font=new Font("Segoe UI",10); details.Padding=new Padding(14); detailsPanel.Controls.Add(details); detailsPanel.Controls.Add(new Label{Text="DETALLE DEL CONTROL SELECCIONADO",Dock=DockStyle.Top,Height=34,Padding=new Padding(12,9,0,0),Font=new Font("Segoe UI",9,FontStyle.Bold),ForeColor=Color.FromArgb(23,54,93),BackColor=Color.White}); body.Panel2.Controls.Add(detailsPanel);
-      bottom.Dock=DockStyle.Bottom; bottom.Height=118; bottom.Padding=new Padding(20,8,20,9); bottom.BackColor=Color.White; progressText.AutoSize=true; progressText.Location=new Point(20,8); progressText.Text="Listo para iniciar la validación."; bottom.Controls.Add(progressText); progress.Location=new Point(20,30); progress.Width=990; progress.Height=15; progress.Anchor=AnchorStyles.Left|AnchorStyles.Right|AnchorStyles.Top; bottom.Controls.Add(progress); finalLabel.AutoSize=true; finalLabel.Font=new Font("Segoe UI",14,FontStyle.Bold); finalLabel.Text="PENDIENTE DE VALIDACIÓN"; finalLabel.Location=new Point(20,56); bottom.Controls.Add(finalLabel);
+      bottom.Dock=DockStyle.Bottom; bottom.Height=118; bottom.Padding=new Padding(20,8,20,9); bottom.BackColor=Color.White; progressText.AutoSize=true; progressText.Location=new Point(20,8); progressText.Text="Listo para iniciar la validación."; bottom.Controls.Add(progressText); loadingBadge.AutoSize=true; loadingBadge.Font=new Font("Segoe UI",8,FontStyle.Bold); loadingBadge.ForeColor=Color.FromArgb(20,82,160); loadingBadge.BackColor=Color.FromArgb(235,244,255); loadingBadge.Padding=new Padding(10,5,10,5); loadingBadge.Text="LISTO"; loadingBadge.Location=new Point(20,51); bottom.Controls.Add(loadingBadge); progress.Location=new Point(20,30); progress.Width=990; progress.Height=15; progress.Anchor=AnchorStyles.Left|AnchorStyles.Right|AnchorStyles.Top; bottom.Controls.Add(progress); finalLabel.AutoSize=true; finalLabel.Font=new Font("Segoe UI",14,FontStyle.Bold); finalLabel.Text="PENDIENTE DE VALIDACIÓN"; finalLabel.Location=new Point(20,79); bottom.Controls.Add(finalLabel);
       var actions=new FlowLayoutPanel{Width=350,Height=40,FlowDirection=FlowDirection.LeftToRight,WrapContents=false,Padding=new Padding(0,2,0,0),BackColor=Color.White}; scan.Text="▶  INICIAR ESCANEO"; scan.Font=new Font("Segoe UI",9,FontStyle.Bold); scan.Size=new Size(178,31); scan.Margin=new Padding(3); scan.BackColor=Color.FromArgb(31,111,235); scan.Click+=async(s,e)=>await RunScan(); actions.Controls.Add(scan); evidence.Text="ABRIR EVIDENCIA"; evidence.Size=new Size(150,31); evidence.Margin=new Padding(3); evidence.BackColor=Color.FromArgb(235,244,255); evidence.ForeColor=Color.FromArgb(20,82,160); evidence.Enabled=false; evidence.Click+=(s,e)=>{if(Directory.Exists(evidenceFolder)) Process.Start("explorer.exe",evidenceFolder);}; actions.Controls.Add(evidence); bottom.Controls.Add(actions); bottom.Resize+=(s,e)=>actions.Location=new Point(Math.Max(20,bottom.ClientSize.Width-actions.Width-20),bottom.ClientSize.Height-actions.Height-12); actions.BringToFront(); Controls.Add(bottom);
       header.Dock=DockStyle.None; info.Dock=DockStyle.None; body.Dock=DockStyle.None; bottom.Dock=DockStyle.None;
       Action arrangeLayout=()=>{int infoHeight=100, headerHeight=87, footerHeight=118; info.Bounds=new Rectangle(0,0,ClientSize.Width,infoHeight); header.Bounds=new Rectangle(0,infoHeight,ClientSize.Width,headerHeight); body.Bounds=new Rectangle(0,infoHeight+headerHeight,ClientSize.Width,Math.Max(120,ClientSize.Height-infoHeight-headerHeight-footerHeight)); bottom.Bounds=new Rectangle(0,ClientSize.Height-footerHeight,ClientSize.Width,footerHeight);};
       Resize+=(s,e)=>arrangeLayout(); Shown+=(s,e)=>arrangeLayout(); Load+=async(s,e)=>{arrangeLayout(); body.SplitterDistance=Math.Max(480,(body.ClientSize.Width*62)/100); InitializePendingResults(); await LoadDevice();};
     }
-    void InitializePendingResults() { if(results.Count>0)return; foreach(string name in new[]{"Administradores locales","BitLocker","Agentes de seguridad","Software base","Windows / KB"})results.Add(Result(name,"NO EVALUADO","Presione INICIAR ESCANEO.","Pendiente de validación.","El control todavía no fue evaluado.","Inicie el escaneo para obtener el resultado.")); selectedIndex=0; Bind(); ShowDetails(); }
+    void InitializePendingResults() { if(results.Count>0)return; foreach(string name in new[]{"Administradores locales","BitLocker","Agentes de seguridad","Software base","Windows / KB","Windows Update","Wi-Fi corporativa"})results.Add(Result(name,"NO EVALUADO","Presione INICIAR ESCANEO.","Pendiente de validación.","El control todavía no fue evaluado.","Inicie el escaneo para obtener el resultado.")); selectedIndex=0; Bind(); ShowDetails(); }
     void AddInfoItem(string caption,Label value,int column,int row){int x=22+column*315,y=9+row*39; info.Controls.Add(new Label{Text=caption,Location=new Point(x,y),AutoSize=true,Font=new Font("Segoe UI",7,FontStyle.Bold),ForeColor=Color.FromArgb(91,107,125)}); value.Location=new Point(x,y+14);value.Size=new Size(290,20);value.Font=new Font("Segoe UI",9,FontStyle.Bold);value.ForeColor=Color.FromArgb(23,54,93);value.AutoEllipsis=true;info.Controls.Add(value);}
     async Task LoadDevice() { try { device=await Task.Run(()=>GetDevice()); DisplayDevice(); } catch(Exception ex) { deviceHost.Text="No disponible"; deviceUser.Text="No disponible"; deviceSerial.Text="No disponible"; deviceModel.Text="Error: "+ex.Message; } }
     void DisplayDevice() { deviceHost.Text=device.Hostname; deviceUser.Text=device.User; deviceSerial.Text=device.Serial; deviceModel.Text=device.Manufacturer+" "+device.Model; deviceWindows.Text=device.Windows; deviceBuild.Text=device.Build+"."+device.UBR+" · "+device.Version; }
+    void SetLoading(bool active,string message) {
+      progressText.Text=message;
+      loadingFrame=0;
+      loadingBadge.Text=active ? "VALIDANDO" : "LISTO";
+      loadingBadge.ForeColor=active ? Color.FromArgb(20,82,160) : Color.FromArgb(22,101,52);
+      loadingBadge.BackColor=active ? Color.FromArgb(235,244,255) : Color.FromArgb(232,247,236);
+      progress.Style=active ? ProgressBarStyle.Marquee : ProgressBarStyle.Continuous;
+      if(active) { progress.MarqueeAnimationSpeed=28; loadingTimer.Start(); } else loadingTimer.Stop();
+    }
+    void AnimateLoadingBadge() {
+      loadingFrame=(loadingFrame+1)%4;
+      loadingBadge.Text="VALIDANDO"+new string('•',loadingFrame+1);
+    }
     async Task RunScan() {
-      scan.Enabled=false; evidence.Enabled=false; try { progressText.Text="Eliminando evidencia temporal anterior..."; ClearPreviousEvidence(); results.Clear(); Bind(); progress.Value=0; started=DateTime.Now; SetFinal("VALIDANDO EQUIPO...",Color.DarkGoldenrod);
+      scan.Enabled=false; evidence.Enabled=false; SetLoading(true,"Preparando validación del equipo..."); try { ClearPreviousEvidence(); results.Clear(); Bind(); progress.Value=0; started=DateTime.Now; SetFinal("VALIDANDO EQUIPO...",Color.DarkGoldenrod);
         string path=Path.Combine(root,"Baseline.json"); if(!File.Exists(path)) throw new Exception("No existe Baseline.json."); baseline=new JavaScriptSerializer().Deserialize<Baseline>(File.ReadAllText(path)); if(device==null) device=await Task.Run(()=>GetDevice());
-        var checks=new Func<ScanResult>[] {()=>CheckAdmins(),()=>CheckBitLocker(),()=>CheckAgents(),()=>CheckSoftware(),()=>CheckWindows()};
-        for(int i=0;i<checks.Length;i++) { progressText.Text="Validando control "+(i+1)+" de "+checks.Length+"..."; progress.Style=ProgressBarStyle.Marquee; progress.MarqueeAnimationSpeed=28; ScanResult r=await Task.Run(checks[i]); progress.Style=ProgressBarStyle.Continuous; progress.Value=(i+1)*20; results.Add(r); selectedIndex=results.Count-1; Bind(); ShowDetails(); }
-        var failing=results.Where(r=>r.Critical && r.Status!="OK").ToList(); SetFinal(failing.Count==0?"APTO PARA ENTREGA":"NO APTO PARA ENTREGA", failing.Count==0?Color.FromArgb(22,101,52):Color.FromArgb(180,35,24)); progressText.Text="Validación terminada. La evidencia fue generada automáticamente."; CreateEvidence();
-      } catch(Exception ex) { results.Add(Result("Baseline / inicialización","NO EVALUADO","Baseline.json válido","",ex.Message,"Revise Baseline.json y vuelva a ejecutar.")); Bind(); SetFinal("NO APTO PARA ENTREGA",Color.Firebrick); progressText.Text="Error de inicialización. Revise Logs\\Scanner.log."; Log("ERROR: "+ex); } finally { scan.Enabled=true; }
+        var checks=new Func<ScanResult>[] {()=>CheckAdmins(),()=>CheckBitLocker(),()=>CheckAgents(),()=>CheckSoftware(),()=>CheckWindows(),()=>CheckWindowsUpdate(),()=>CheckCorporateWifi()};
+        for(int i=0;i<checks.Length;i++) { progressText.Text="Validando control "+(i+1)+" de "+checks.Length+"..."; ScanResult r=await Task.Run(checks[i]); progress.Value=(i+1)*100/checks.Length; results.Add(r); selectedIndex=results.Count-1; Bind(); ShowDetails(); }
+        var failing=results.Where(r=>r.Critical && r.Status!="OK").ToList(); SetFinal(failing.Count==0?"APTO PARA ENTREGA":"NO APTO PARA ENTREGA", failing.Count==0?Color.FromArgb(22,101,52):Color.FromArgb(180,35,24)); CreateEvidence(); SetLoading(false,"Validación terminada. La evidencia fue generada automáticamente.");
+      } catch(Exception ex) { results.Add(Result("Baseline / inicialización","NO EVALUADO","Baseline.json válido","",ex.Message,"Revise Baseline.json y vuelva a ejecutar.")); Bind(); SetFinal("NO APTO PARA ENTREGA",Color.Firebrick); SetLoading(false,"Error de inicialización. Revise Logs\\Scanner.log."); Log("ERROR: "+ex); } finally { scan.Enabled=true; }
     }
     void Bind() { if(grid.IsDisposed)return; grid.SuspendLayout(); grid.Controls.Clear(); for(int index=0;index<results.Count;index++) {var r=results[index]; int capture=index; var row=new RoundedPanel{Width=Math.Max(360,grid.ClientSize.Width-28),Height=46,Margin=new Padding(0,0,0,7),BackColor=capture==selectedIndex?Color.FromArgb(235,244,255):Color.White,BorderColor=Color.FromArgb(215,225,238),CornerRadius=10,Cursor=Cursors.Hand}; Color color=r.Status=="OK"?Color.ForestGreen:r.Status=="FALLA"?Color.Firebrick:r.Status=="ADVERTENCIA"?Color.DarkGoldenrod:Color.DimGray; var icon=new Label{Text=r.Icon,Location=new Point(20,10),Width=26,Height=25,Font=new Font("Segoe UI",14,FontStyle.Bold),ForeColor=color,TextAlign=ContentAlignment.MiddleCenter}; var name=new Label{Text=r.Name,Location=new Point(75,14),Width=195,Height=22,Font=new Font("Segoe UI",9,FontStyle.Bold),ForeColor=Color.FromArgb(25,47,74)}; var status=new Label{Text=r.Status,Location=new Point(275,14),Width=100,Height=22,Font=new Font("Segoe UI",8,FontStyle.Bold),ForeColor=color}; var eye=new RoundedButton{Text="👁  VER",Location=new Point(Math.Max(370,row.Width-96),9),Size=new Size(86,28),Font=new Font("Segoe UI",8,FontStyle.Bold),BackColor=Color.FromArgb(225,238,255),ForeColor=Color.FromArgb(20,82,160)}; EventHandler select=(s,e)=>{selectedIndex=capture; Bind(); ShowDetails();}; row.Click+=select; icon.Click+=select; name.Click+=select; status.Click+=select; eye.Click+=select; row.Controls.Add(icon);row.Controls.Add(name);row.Controls.Add(status);row.Controls.Add(eye);grid.Controls.Add(row);} grid.ResumeLayout(); }
     void ShowDetails() { if(selectedIndex<0 || selectedIndex>=results.Count) return; var r=results[selectedIndex]; details.Text=r.Name+"\r\n\r\nEstado: "+r.Status+"\r\n\r\nEsperado:\r\n"+r.Expected+"\r\n\r\nDetectado:\r\n"+r.Detected+"\r\n\r\nProblema:\r\n"+r.Problem+"\r\n\r\nAcción recomendada:\r\n"+r.Action; }
@@ -96,6 +193,71 @@ namespace EndpointReadinessScanner {
     ScanResult CheckSoftware() { var list=baseline.RequiredSoftware??new List<Rule>(); if(!list.Any())return Result("Software base","ADVERTENCIA","Software definido en Baseline.json","No hay software configurado.","No se puede validar sin una lista.","Configure RequiredSoftware."); var all=Installed();var d=new List<string>();var p=new List<string>();foreach(var r in list.Where(x=>x.Required)){var f=all.FirstOrDefault(x=>x.Item1.IndexOf(r.Name,StringComparison.OrdinalIgnoreCase)>=0);if(f==null){d.Add(r.Name+": no instalado");p.Add(r.Name+": no instalado");}else{d.Add(r.Name+": "+f.Item2);Version a,b;if(!string.IsNullOrWhiteSpace(r.MinimumVersion)&&(!System.Version.TryParse(f.Item2,out a)||!System.Version.TryParse(r.MinimumVersion,out b)||a<b))p.Add(r.Name+": versión inferior a "+r.MinimumVersion);}}return p.Any()?Result("Software base","FALLA","Software y versiones según baseline",string.Join("\r\n",d),string.Join("\r\n",p),"Instale o actualice el software y revalide."):Result("Software base","OK","Software y versiones según baseline",string.Join("\r\n",d),"",""); }
     List<Tuple<string,string>> Installed(){var x=new List<Tuple<string,string>>();foreach(var path in new[]{@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",@"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"})using(var k=Registry.LocalMachine.OpenSubKey(path)){if(k==null)continue;foreach(var n in k.GetSubKeyNames())using(var a=k.OpenSubKey(n)){var name=""+a.GetValue("DisplayName");if(!string.IsNullOrWhiteSpace(name))x.Add(Tuple.Create(name,""+a.GetValue("DisplayVersion")));}}return x;}
     ScanResult CheckWindows(){try{var w=baseline.Windows;if(w==null)return Result("Windows / KB","NO EVALUADO","Configuración Windows","","Falta la sección Windows.","Complete Baseline.json.");var issues=new List<string>();if(!string.IsNullOrWhiteSpace(w.Edition)&&device.Windows.IndexOf(w.Edition,StringComparison.OrdinalIgnoreCase)<0)issues.Add("Edición requerida: "+w.Edition);int mb;if(int.TryParse(w.MinimumBuild,out mb)&&int.Parse(device.Build)<mb)issues.Add("Build mínimo: "+mb);if(w.MinimumUBR>0&&device.UBR<w.MinimumUBR)issues.Add("UBR mínimo: "+w.MinimumUBR);var kb=new List<string>();using(var s=new ManagementObjectSearcher("SELECT HotFixID FROM Win32_QuickFixEngineering"))foreach(ManagementObject o in s.Get())kb.Add(""+o["HotFixID"]);foreach(var k in w.ApprovedKB??new List<string>())if(!kb.Contains(k,StringComparer.OrdinalIgnoreCase))issues.Add("KB faltante: "+k);string det="Edición: "+device.Windows+"\r\nBuild: "+device.Build+"."+device.UBR+"\r\nKB instaladas: "+string.Join(", ",kb);return issues.Any()?Result("Windows / KB","FALLA","Edición, build, UBR y KB según baseline",det,string.Join("\r\n",issues),"Instale las actualizaciones aprobadas y revalide."):Result("Windows / KB","OK","Edición, build, UBR y KB según baseline",det,"","");}catch(Exception e){return Result("Windows / KB","NO EVALUADO","Consultar Windows y KB","",e.Message,"Revise permisos y revalide.");}}
+    /// <summary>Busca en línea actualizaciones pendientes mediante la API nativa de Windows Update.</summary>
+    ScanResult CheckWindowsUpdate() { return RunOnSta(CheckWindowsUpdateCore); }
+
+    ScanResult CheckWindowsUpdateCore(){
+      try {
+        var rule=baseline.WindowsUpdate;
+        if(rule==null) return Result("Windows Update","ADVERTENCIA","Reglas de Windows Update definidas en Baseline.json","No hay reglas configuradas.","No se puede validar Windows Update sin la sección WindowsUpdate.","Configure WindowsUpdate en Baseline.json.");
+        if(!rule.Required) return Result("Windows Update","OK","Control Windows Update no requerido","Control deshabilitado en Baseline.json.","","");
+        Type sessionType=Type.GetTypeFromProgID("Microsoft.Update.Session");
+        Type systemInfoType=Type.GetTypeFromProgID("Microsoft.Update.SystemInfo");
+        if(sessionType==null || systemInfoType==null) throw new Exception("La API de Windows Update no está disponible en este equipo.");
+        object session=Activator.CreateInstance(sessionType);
+        object searcher=ComMethod(session,"CreateUpdateSearcher");
+        ComPropertySet(searcher,"Online",true);
+        ComPropertySet(searcher,"ServerSelection",2); // ssWindowsUpdate: equivalente a buscar en Windows Update.
+        object searchResult=ComMethod(searcher,"Search","IsInstalled=0 and IsHidden=0");
+        object updates=ComProperty(searchResult,"Updates");
+        int updateCount=Convert.ToInt32(ComProperty(updates,"Count"));
+        var titles=new List<string>();
+        for(int i=0;i<Math.Min(updateCount,10);i++) { object update=ComIndexedProperty(updates,"Item",i); titles.Add("- "+Convert.ToString(ComProperty(update,"Title"))); }
+        object systemInfo=Activator.CreateInstance(systemInfoType);
+        bool rebootRequired=Convert.ToBoolean(ComProperty(systemInfo,"RebootRequired"));
+        var detected=new List<string>{"Actualizaciones pendientes: "+updateCount,"Reinicio pendiente: "+(rebootRequired?"Sí":"No")};
+        if(titles.Any()) { detected.Add(""); detected.Add("ACTUALIZACIONES DEL SISTEMA PENDIENTES (REQUIERE ATENCIÓN):"); detected.AddRange(titles); if(updateCount>titles.Count) detected.Add("- y "+(updateCount-titles.Count)+" más"); }
+        var problems=new List<string>();
+        if(rule.RequireNoPendingUpdates && updateCount>0) problems.Add(updateCount+" actualización(es) pendiente(s).");
+        if(rule.RequireNoReboot && rebootRequired) problems.Add("Hay un reinicio pendiente para completar actualizaciones.");
+        return problems.Any()?Result("Windows Update","ADVERTENCIA","Sin actualizaciones ni reinicios pendientes.",string.Join("\r\n",detected),string.Join("\r\n",problems),"Instale las actualizaciones indicadas, reinicie si se solicita y vuelva a ejecutar el escaneo."):Result("Windows Update","OK","Sin actualizaciones ni reinicios pendientes.",string.Join("\r\n",detected),"","");
+      } catch(Exception e) { return Result("Windows Update","NO EVALUADO","Consultar actualizaciones pendientes de Windows","",RootExceptionMessage(e),"Compruebe el servicio Windows Update, la conectividad y vuelva a validar."); }
+    }
+    static object ComProperty(object value,string name) { return value.GetType().InvokeMember(name,BindingFlags.GetProperty,null,value,null); }
+    static object ComIndexedProperty(object value,string name,int index) { return value.GetType().InvokeMember(name,BindingFlags.GetProperty,null,value,new object[]{index}); }
+    static void ComPropertySet(object value,string name,object propertyValue) { value.GetType().InvokeMember(name,BindingFlags.SetProperty,null,value,new[]{propertyValue}); }
+    static object ComMethod(object value,string name,params object[] arguments) { return value.GetType().InvokeMember(name,BindingFlags.InvokeMethod,null,value,arguments); }
+    static string RootExceptionMessage(Exception exception) { while(exception.InnerException!=null) exception=exception.InnerException; return exception.Message; }
+    static ScanResult RunOnSta(Func<ScanResult> action) {
+      ScanResult result=null; Exception error=null;
+      var thread=new Thread(()=>{try { result=action(); } catch(Exception e) { error=e; }});
+      thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();
+      if(error!=null) throw error;
+      return result;
+    }
+    ScanResult CheckCorporateWifi(){
+      try {
+        var wifi=baseline.CorporateWifi;
+        if(wifi==null || string.IsNullOrWhiteSpace(wifi.Ssid)) return Result("Wi-Fi corporativa","ADVERTENCIA","SSID corporativo definido en Baseline.json","No hay SSID configurado.","No se puede validar la red corporativa sin configurar CorporateWifi.Ssid.","Configure CorporateWifi.Ssid, por ejemplo mcp_int_corp.");
+        if(!wifi.Required) return Result("Wi-Fi corporativa","OK","Control Wi-Fi no requerido","SSID configurado: "+wifi.Ssid,"","");
+        string output=RunRaw("netsh.exe","wlan show interfaces");
+        var interfaces=new List<string>();
+        string currentName=null, currentState=null, currentSsid=null;
+        foreach(string raw in output.Replace("\r","").Split('\n')) {
+          string line=raw.Trim();
+          var name=Regex.Match(line,@"^(?:Name|Nombre)\s*:\s*(.+)$",RegexOptions.IgnoreCase);
+          if(name.Success) { if(currentName!=null) interfaces.Add(DescribeWifi(currentName,currentState,currentSsid)); currentName=name.Groups[1].Value.Trim(); currentState=null; currentSsid=null; continue; }
+          var state=Regex.Match(line,@"^(?:State|Estado)\s*:\s*(.+)$",RegexOptions.IgnoreCase); if(state.Success) { currentState=state.Groups[1].Value.Trim(); continue; }
+          var ssid=Regex.Match(line,@"^SSID\s*:\s*(.+)$",RegexOptions.IgnoreCase); if(ssid.Success) currentSsid=ssid.Groups[1].Value.Trim();
+        }
+        if(currentName!=null) interfaces.Add(DescribeWifi(currentName,currentState,currentSsid));
+        string detected=interfaces.Any()?string.Join("\r\n",interfaces):"No se detectaron interfaces Wi-Fi.\r\n"+output.Trim();
+        bool connected=Regex.IsMatch(output,@"(?im)^\s*SSID\s*:\s*"+Regex.Escape(wifi.Ssid)+@"\s*$");
+        if(connected) return Result("Wi-Fi corporativa","OK","Conectado al SSID: "+wifi.Ssid,detected,"","");
+        return Result("Wi-Fi corporativa","FALLA","Conectado al SSID: "+wifi.Ssid,detected,"El equipo no está conectado a la red Wi-Fi corporativa requerida.","Conecte el equipo a "+wifi.Ssid+" y vuelva a ejecutar el escaneo.");
+      } catch(Exception e) { return Result("Wi-Fi corporativa","NO EVALUADO","Consultar la conexión Wi-Fi corporativa","",e.Message,"Compruebe que el servicio WLAN AutoConfig esté disponible y vuelva a validar."); }
+    }
+    static string DescribeWifi(string name,string state,string ssid) { return "Interfaz: "+name+" | Estado: "+(string.IsNullOrWhiteSpace(state)?"No disponible":state)+" | SSID: "+(string.IsNullOrWhiteSpace(ssid)?"No conectado":ssid); }
     static int MatchInt(string s,string p){var m=Regex.Match(s,p,RegexOptions.IgnoreCase);int n;return m.Success&&int.TryParse(m.Groups[1].Value,out n)?n:0;} static string Run(string file,string args){var p=Process.Start(new ProcessStartInfo(file,args){UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true,CreateNoWindow=true});string o=p.StandardOutput.ReadToEnd()+p.StandardError.ReadToEnd();p.WaitForExit();if(p.ExitCode!=0)throw new Exception(o);return o;} static string RunRaw(string file,string args){var p=Process.Start(new ProcessStartInfo(file,args){UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true,CreateNoWindow=true});string o=p.StandardOutput.ReadToEnd()+p.StandardError.ReadToEnd();p.WaitForExit();return o;}
     void ClearPreviousEvidence(){string evidenceRoot=Path.Combine(root,"Evidence"); if(Directory.Exists(evidenceRoot))foreach(string item in Directory.GetFileSystemEntries(evidenceRoot)){if(Directory.Exists(item))Directory.Delete(item,true);else File.Delete(item);} Directory.CreateDirectory(evidenceRoot); evidenceFolder=null; Log("Previous temporary evidence removed.");}
     void CreateEvidence(){var now=DateTime.Now;string serial=Regex.Replace(device.Serial??"UNKNOWN",@"[^a-zA-Z0-9._-]","_");evidenceFolder=Path.Combine(root,"Evidence",now.ToString("yyyy"),now.ToString("MM"),serial+"_"+now.ToString("yyyyMMdd_HHmmss"));Directory.CreateDirectory(evidenceFolder);string final=results.All(x=>!x.Critical||x.Status=="OK")?"APTO PARA ENTREGA":"NO APTO PARA ENTREGA";var data=new {Scanner=new{Name="Endpoint Readiness Scanner",Version},BaselineVersion=baseline.BaselineVersion,Device=device,Execution=new{Date=started.ToString("yyyy-MM-dd"),Time=started.ToString("HH:mm:ss")},Results=results,FinalResult=final};File.WriteAllText(Path.Combine(evidenceFolder,"Resultado.json"),new JavaScriptSerializer().Serialize(data),Encoding.UTF8);File.WriteAllLines(Path.Combine(evidenceFolder,"Resumen.txt"),new[]{"Endpoint Readiness Scanner "+Version,"Equipo: "+device.Hostname,"Serial: "+device.Serial,"Usuario: "+device.User,"Resultado: "+final,""}.Concat(results.Select(r=>"["+r.Status+"] "+r.Name+" - "+r.Problem)),Encoding.UTF8);File.WriteAllText(Path.Combine(evidenceFolder,"Auditoria.log"),"Inicio: "+started.ToString("s")+"\r\nFin: "+DateTime.Now.ToString("s")+"\r\nResultado: "+final,Encoding.UTF8);evidence.Enabled=true;Log("Evidence created: "+evidenceFolder);}

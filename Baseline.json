@@ -1,5 +1,5 @@
 {
-  "BaselineVersion": "1.0.0",
+  "BaselineVersion": "1.2.0",
   "LocalAdministrators": {
     "AllowedMembers": []
   },
@@ -31,5 +31,14 @@
     "MinimumBuild": "",
     "MinimumUBR": 0,
     "ApprovedKB": []
+  },
+  "WindowsUpdate": {
+    "Required": true,
+    "RequireNoPendingUpdates": true,
+    "RequireNoReboot": true
+  },
+  "CorporateWifi": {
+    "Required": true,
+    "Ssid": "mcp_int_corp"
   }
 }

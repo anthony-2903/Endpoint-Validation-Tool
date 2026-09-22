@@ -1,7 +1,7 @@
 ENDPOINT READINESS SCANNER v1.0.0
 
 PROPÓSITO
-Scanner local, sin remediación, para que personal N2 valide cinco controles críticos antes de entregar un equipo Windows: Administradores locales, BitLocker, agentes de seguridad, software base y Windows/KB.
+Scanner local, sin remediación, para que personal N2 valide seis controles críticos antes de entregar un equipo Windows: Administradores locales, BitLocker, agentes de seguridad, software base, Windows/KB y conexión Wi-Fi corporativa.
 
 REQUISITOS Y EJECUCIÓN
 - Windows con .NET Framework 4.x (incluido en Windows 10 y Windows 11).
@@ -14,7 +14,13 @@ CONFIGURACIÓN DEL BASELINE
 Edite Baseline.json antes de uso productivo. Defina los miembros autorizados de Administradores locales, los agentes y servicios requeridos, el software obligatorio y las reglas de Windows/KB. La plantilla incluye Google Chrome y Adobe Acrobat como software requerido. Ajuste MinimumVersion a la versión mínima aprobada por su organización; el scanner compara la versión instalada con ese valor. Los arreglos vacíos de la plantilla se reportan como ADVERTENCIA y, al ser controles críticos, impiden aprobar el equipo. Los nombres de miembros deben coincidir con los devueltos por Windows, por ejemplo DOMINIO\AdminIT.
 
 RESULTADOS
-Los estados son OK, FALLA, ADVERTENCIA y NO EVALUADO. La lista muestra un icono: ✓ para OK, ✕ para FALLA, ! para ADVERTENCIA y ? para NO EVALUADO. Seleccione un control de la lista para ver lo esperado, lo detectado, el motivo y la acción necesaria. El resultado final es APTO PARA ENTREGA únicamente cuando los cinco controles críticos tienen estado OK. El scanner nunca corrige configuraciones ni expone claves BitLocker.
+Los estados son OK, FALLA, ADVERTENCIA y NO EVALUADO. La lista muestra un icono: ✓ para OK, ✕ para FALLA, ! para ADVERTENCIA y ? para NO EVALUADO. Seleccione un control de la lista para ver lo esperado, lo detectado, el motivo y la acción necesaria. El resultado final es APTO PARA ENTREGA únicamente cuando los seis controles críticos tienen estado OK. El scanner nunca corrige configuraciones ni expone claves BitLocker o Wi-Fi.
+
+WI-FI CORPORATIVA
+Configure CorporateWifi.Ssid en Baseline.json. La plantilla usa mcp_int_corp como SSID requerido. El scanner ejecuta netsh wlan show interfaces y aprueba solo cuando detecta una conexión activa a ese nombre exacto. No guarda ni muestra contraseñas o claves Wi-Fi. La comprobación de SSID no sustituye la validación de autenticación 802.1X, VLAN, DNS o acceso a recursos internos.
+
+WINDOWS UPDATE
+La sección WindowsUpdate del Baseline.json controla esta validación. Con Required, RequireNoPendingUpdates y RequireNoReboot en true, el equipo solo aprueba si Windows no informa actualizaciones visibles pendientes ni un reinicio pendiente. El scanner consulta la API local de Windows Update; no descarga, instala ni modifica actualizaciones.
 
 EVIDENCIA Y REGISTROS
 Al terminar se crea Evidence\YYYY\MM\SERIAL_YYYYMMDD_HHMMSS\ con Resultado.json, Resumen.txt y Auditoria.log. Los mensajes técnicos se almacenan en Logs\Scanner.log.
